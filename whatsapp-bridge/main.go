@@ -18,7 +18,6 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/mdp/qrterminal"
 
 	"bytes"
 
@@ -677,8 +676,43 @@ func extractDirectPathFromURL(url string) string {
 
 // Start a REST API server to expose the WhatsApp client functionality
 func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+	mux := http.NewServeMux()
+	allowedOrigins := map[string]bool{
+		"tauri://localhost": true, "https://tauri.localhost": true,
+		"http://tauri.localhost": true, "http://localhost:5173": true,
+		"http://127.0.0.1:5173": true,
+	}
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		runtimeStatus.RLock()
+		state := map[string]any{
+			"connected": client.IsConnected(), "logged_in": client.Store.ID != nil,
+			"has_session": client.Store.ID != nil, "jid": runtimeStatus.jid,
+			"auth_state": runtimeStatus.stage, "qr_code": runtimeStatus.qrCode,
+			"qr_image": runtimeStatus.qrImage, "sync_progress": runtimeStatus.progress,
+			"chats_synced": runtimeStatus.chatsSynced, "os": "PIHU", "platform": "PIHU Desktop",
+		}
+		runtimeStatus.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+	})
+	mux.HandleFunc("/api/pair", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		runtimeStatus.RLock()
+		state := map[string]any{"logged_in": client.Store.ID != nil, "qr_code": runtimeStatus.qrCode, "qr_image": runtimeStatus.qrImage, "stage": runtimeStatus.stage}
+		runtimeStatus.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+	})
+
 	// Handler for sending messages
-	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -724,7 +758,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	})
 
 	// Handler for downloading media
-	http.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -775,12 +809,30 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 	})
 
 	// Start the server
-	serverAddr := fmt.Sprintf(":%d", port)
+	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
 
 	// Run server in a goroutine so it doesn't block
 	go func() {
-		if err := http.ListenAndServe(serverAddr, nil); err != nil {
+		if err := http.ListenAndServe(serverAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && !allowedOrigins[origin] {
+				http.Error(w, "Origin not allowed", http.StatusForbidden)
+				return
+			}
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Cache-Control", "no-store")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		})); err != nil {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
@@ -847,11 +899,33 @@ func main() {
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+			runtimeStatus.Lock()
+			runtimeStatus.connected = true
+			runtimeStatus.loggedIn = client.Store.ID != nil
+			runtimeStatus.stage = "syncing"
+			if client.Store.ID != nil {
+				runtimeStatus.jid = client.Store.ID.String()
+			}
+			runtimeStatus.Unlock()
+			if err := whatsappRelay.publish("syncing", "", relayStatus()); err != nil {
+				logger.Warnf("WhatsApp web status relay unavailable: %v", err)
+			}
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
+			runtimeStatus.Lock()
+			runtimeStatus.connected = false
+			runtimeStatus.loggedIn = false
+			runtimeStatus.stage = "waiting"
+			runtimeStatus.Unlock()
+			if err := whatsappRelay.publish("error", "", relayStatus()); err != nil {
+				logger.Warnf("WhatsApp web status relay unavailable: %v", err)
+			}
 		}
 	})
+
+	// Make the loopback API available before the user scans the first QR code.
+	startRESTServer(client, messageStore, 8080)
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)
@@ -859,7 +933,11 @@ func main() {
 	// Connect to WhatsApp
 	if client.Store.ID == nil {
 		// No ID stored, this is a new client, need to pair with phone
-		qrChan, _ := client.GetQRChannel(context.Background())
+		qrChan, qrErr := client.GetQRChannel(context.Background())
+		if qrErr != nil {
+			logger.Errorf("Failed to prepare QR pairing: %v", qrErr)
+			return
+		}
 		err = client.Connect()
 		if err != nil {
 			logger.Errorf("Failed to connect: %v", err)
@@ -869,9 +947,27 @@ func main() {
 		// Print QR code for pairing with phone
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+				if err := runtimeStatus.setPairingQR(evt.Code); err != nil {
+					logger.Errorf("Could not render pairing QR: %v", err)
+					continue
+				}
+				fmt.Println("\nWhatsApp pairing QR is ready in PIHU and the secure PIHU auth page.")
+				if err := whatsappRelay.publish("pairing", evt.Code, relayStatus()); err != nil {
+					logger.Warnf("WhatsApp web pairing page is unavailable: %v", err)
+				}
 			} else if evt.Event == "success" {
+				runtimeStatus.clearQR()
+				runtimeStatus.Lock()
+				runtimeStatus.connected = true
+				runtimeStatus.loggedIn = true
+				runtimeStatus.stage = "syncing"
+				if client.Store.ID != nil {
+					runtimeStatus.jid = client.Store.ID.String()
+				}
+				runtimeStatus.Unlock()
+				if err := whatsappRelay.publish("syncing", "", relayStatus()); err != nil {
+					logger.Warnf("WhatsApp web sync status relay unavailable: %v", err)
+				}
 				connected <- true
 				break
 			}
@@ -905,8 +1001,13 @@ func main() {
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
-	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
+	runtimeStatus.Lock()
+	runtimeStatus.connected = client.IsConnected()
+	runtimeStatus.loggedIn = client.Store.ID != nil
+	if client.Store.ID != nil {
+		runtimeStatus.jid = client.Store.ID.String()
+	}
+	runtimeStatus.Unlock()
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
@@ -1072,9 +1173,6 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength = extractMediaInfo(msg.Message.Message)
 				}
 
-				// Log the message content for debugging
-				logger.Infof("Message content: %v, Media Type: %v", content, mediaType)
-
 				// Skip messages with no content and no media
 				if content == "" && mediaType == "" {
 					continue
@@ -1131,20 +1229,30 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					logger.Warnf("Failed to store history message: %v", err)
 				} else {
 					syncedCount++
-					// Log successful message storage
-					if mediaType != "" {
-						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)
-					} else {
-						logger.Infof("Stored message: [%s] %s -> %s: %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, content)
-					}
 				}
 			}
 		}
 	}
 
-	fmt.Printf("History sync complete. Stored %d messages.\n", syncedCount)
+	fmt.Printf("History sync chunk processed: %d messages.\n", syncedCount)
+	progress := 0
+	if historySync.Data != nil {
+		progress = int(historySync.Data.GetProgress())
+	}
+	runtimeStatus.Lock()
+	runtimeStatus.progress = progress
+	runtimeStatus.chatsSynced += len(historySync.Data.GetConversations())
+	if progress >= 100 {
+		runtimeStatus.stage = "connected"
+	}
+	runtimeStatus.Unlock()
+	stage := "syncing"
+	if progress >= 100 {
+		stage = "connected"
+	}
+	if err := whatsappRelay.publish(stage, "", relayStatus()); err != nil {
+		logger.Warnf("Could not relay WhatsApp sync progress: %v", err)
+	}
 }
 
 // Request history sync from the server
