@@ -11,14 +11,15 @@ import (
 
 type whatsappRuntime struct {
 	sync.RWMutex
-	qrCode      string
-	qrImage     string
-	stage       string
-	progress    int
-	chatsSynced int
-	connected   bool
-	loggedIn    bool
-	jid         string
+	qrCode         string
+	qrImage        string
+	stage          string
+	progress       int
+	chatsSynced    int
+	connected      bool
+	loggedIn       bool
+	pairingStarted bool
+	jid            string
 }
 
 var runtimeStatus = &whatsappRuntime{stage: "waiting"}

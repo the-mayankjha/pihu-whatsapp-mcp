@@ -156,9 +156,6 @@ func (relay *pairingRelay) publish(stage, qrPayload string, status map[string]an
 			return fmt.Errorf("encode WhatsApp pairing QR: %w", err)
 		}
 		payload["qr_svg"] = base64.StdEncoding.EncodeToString([]byte(qrSVG(code)))
-		if err := relay.openPage(); err != nil {
-			fmt.Printf("Could not open WhatsApp auth page: %v\n", err)
-		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

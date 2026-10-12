@@ -705,17 +705,46 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			return
 		}
 		if r.Method == http.MethodPost {
-			if client.Store.ID != nil {
+			if client.Store.ID != nil && client.IsConnected() {
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]any{"logged_in": true, "jid": client.Store.ID.String()})
+				json.NewEncoder(w).Encode(map[string]any{"logged_in": true, "connected": true, "jid": client.Store.ID.String()})
+				return
+			}
+			runtimeStatus.Lock()
+			pairingAlreadyStarted := runtimeStatus.pairingStarted
+			if !pairingAlreadyStarted {
+				// Reserve the one-shot QR channel before releasing the lock so the
+				// startup flow and this button cannot both initialize pairing.
+				runtimeStatus.pairingStarted = true
+			}
+			runtimeStatus.Unlock()
+			if pairingAlreadyStarted {
+				if err := whatsappRelay.begin(); err != nil {
+					http.Error(w, fmt.Sprintf("Could not prepare the secure WhatsApp auth page: %v", err), http.StatusBadGateway)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]any{"started": true, "existing": true})
 				return
 			}
 			qrChan, err := client.GetQRChannel(context.Background())
 			if err != nil {
+				runtimeStatus.Lock()
+				runtimeStatus.pairingStarted = false
+				runtimeStatus.Unlock()
 				http.Error(w, fmt.Sprintf("Could not start WhatsApp pairing: %v", err), http.StatusConflict)
 				return
 			}
+			if err := whatsappRelay.begin(); err != nil {
+				http.Error(w, fmt.Sprintf("Could not prepare the secure WhatsApp auth page: %v", err), http.StatusBadGateway)
+				return
+			}
 			if err := client.Connect(); err != nil {
+				runtimeStatus.Lock()
+				runtimeStatus.pairingStarted = false
+				runtimeStatus.Unlock()
+				whatsappRelay.reset()
 				http.Error(w, fmt.Sprintf("Could not connect WhatsApp bridge: %v", err), http.StatusBadGateway)
 				return
 			}
@@ -735,6 +764,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 						runtimeStatus.Lock()
 						runtimeStatus.connected = true
 						runtimeStatus.loggedIn = true
+						runtimeStatus.pairingStarted = false
 						runtimeStatus.stage = "syncing"
 						if client.Store.ID != nil {
 							runtimeStatus.jid = client.Store.ID.String()
@@ -761,7 +791,11 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := whatsappRelay.reopenPage(); err != nil {
+		// This endpoint is only called by the explicit Pair WhatsApp action.
+		// Always focus/open the auth page, including when a previous attempt
+		// left the relay marked as already opened.
+		err := whatsappRelay.reopenPage()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -797,6 +831,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		runtimeStatus.Lock()
 		runtimeStatus.connected = false
 		runtimeStatus.loggedIn = false
+		runtimeStatus.pairingStarted = false
 		runtimeStatus.jid = ""
 		runtimeStatus.stage = "waiting"
 		runtimeStatus.progress = 0
@@ -1051,13 +1086,22 @@ func main() {
 	// Connect to WhatsApp
 	if client.Store.ID == nil {
 		// No ID stored, this is a new client, need to pair with phone
+		runtimeStatus.Lock()
+		runtimeStatus.pairingStarted = true
+		runtimeStatus.Unlock()
 		qrChan, qrErr := client.GetQRChannel(context.Background())
 		if qrErr != nil {
+			runtimeStatus.Lock()
+			runtimeStatus.pairingStarted = false
+			runtimeStatus.Unlock()
 			logger.Errorf("Failed to prepare QR pairing: %v", qrErr)
 			return
 		}
 		err = client.Connect()
 		if err != nil {
+			runtimeStatus.Lock()
+			runtimeStatus.pairingStarted = false
+			runtimeStatus.Unlock()
 			logger.Errorf("Failed to connect: %v", err)
 			return
 		}
@@ -1078,6 +1122,7 @@ func main() {
 				runtimeStatus.Lock()
 				runtimeStatus.connected = true
 				runtimeStatus.loggedIn = true
+				runtimeStatus.pairingStarted = false
 				runtimeStatus.stage = "syncing"
 				if client.Store.ID != nil {
 					runtimeStatus.jid = client.Store.ID.String()
