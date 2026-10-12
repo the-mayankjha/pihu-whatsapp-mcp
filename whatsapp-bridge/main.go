@@ -706,6 +706,14 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		}
 		if r.Method == http.MethodPost {
 			if client.Store.ID != nil && client.IsConnected() {
+				if err := whatsappRelay.begin(); err != nil {
+					http.Error(w, fmt.Sprintf("Could not prepare the secure WhatsApp auth page: %v", err), http.StatusBadGateway)
+					return
+				}
+				if err := whatsappRelay.publish("connected", "", relayStatus()); err != nil {
+					http.Error(w, fmt.Sprintf("Could not publish WhatsApp connection status: %v", err), http.StatusBadGateway)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{"logged_in": true, "connected": true, "jid": client.Store.ID.String()})
 				return
@@ -781,7 +789,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			return
 		}
 		runtimeStatus.RLock()
-		state := map[string]any{"logged_in": client.Store.ID != nil, "qr_code": runtimeStatus.qrCode, "qr_image": runtimeStatus.qrImage, "stage": runtimeStatus.stage}
+		state := map[string]any{"logged_in": client.Store.ID != nil, "connected": client.IsConnected(), "qr_code": runtimeStatus.qrCode, "qr_image": runtimeStatus.qrImage, "stage": runtimeStatus.stage}
 		runtimeStatus.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(state)
