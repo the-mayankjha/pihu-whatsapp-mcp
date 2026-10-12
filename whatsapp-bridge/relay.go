@@ -73,20 +73,54 @@ func (relay *pairingRelay) begin() error {
 	return nil
 }
 
-func (relay *pairingRelay) openPage() {
+func (relay *pairingRelay) openPage() error {
 	relay.mu.Lock()
-	if relay.opened || relay.session.ID == "" {
+	if relay.session.ID == "" {
 		relay.mu.Unlock()
-		return
+		return fmt.Errorf("WhatsApp pairing page is not ready")
+	}
+	if relay.opened {
+		relay.mu.Unlock()
+		return nil
 	}
 	relay.opened = true
-	session := relay.session
 	relay.mu.Unlock()
 
+	pageURL, err := relay.authURL()
+	if err != nil {
+		relay.mu.Lock()
+		relay.opened = false
+		relay.mu.Unlock()
+		return err
+	}
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", pageURL)
+	case "windows":
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", pageURL)
+	default:
+		command = exec.Command("xdg-open", pageURL)
+	}
+	if err := command.Start(); err != nil {
+		relay.mu.Lock()
+		relay.opened = false
+		relay.mu.Unlock()
+		return fmt.Errorf("could not open WhatsApp auth page: %w", err)
+	}
+	return nil
+}
+
+func (relay *pairingRelay) authURL() (string, error) {
+	relay.mu.Lock()
+	session := relay.session
+	relay.mu.Unlock()
+	if session.ID == "" || session.ViewerToken == "" {
+		return "", fmt.Errorf("WhatsApp pairing session is not ready")
+	}
 	page, err := url.Parse(relay.pageURL)
 	if err != nil || page.Scheme != "https" || page.Host != "pihu.nfks.co.in" {
-		fmt.Println("WhatsApp hosted auth page is not a trusted PIHU HTTPS URL")
-		return
+		return "", fmt.Errorf("WhatsApp hosted auth page is not a trusted PIHU HTTPS URL")
 	}
 	page.Path = strings.TrimRight(page.Path, "/")
 	query := page.Query()
@@ -94,18 +128,14 @@ func (relay *pairingRelay) openPage() {
 	page.RawQuery = query.Encode()
 	page.Fragment = "access=" + url.QueryEscape(session.ViewerToken)
 
-	var command *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		command = exec.Command("open", page.String())
-	case "windows":
-		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", page.String())
-	default:
-		command = exec.Command("xdg-open", page.String())
-	}
-	if err := command.Start(); err != nil {
-		fmt.Printf("Could not open WhatsApp auth page: %v\n", err)
-	}
+	return page.String(), nil
+}
+
+func (relay *pairingRelay) reset() {
+	relay.mu.Lock()
+	relay.session = relaySession{}
+	relay.opened = false
+	relay.mu.Unlock()
 }
 
 func (relay *pairingRelay) publish(stage, qrPayload string, status map[string]any) error {
@@ -119,7 +149,9 @@ func (relay *pairingRelay) publish(stage, qrPayload string, status map[string]an
 			return fmt.Errorf("encode WhatsApp pairing QR: %w", err)
 		}
 		payload["qr_svg"] = base64.StdEncoding.EncodeToString([]byte(qrSVG(code)))
-		relay.openPage()
+		if err := relay.openPage(); err != nil {
+			fmt.Printf("Could not open WhatsApp auth page: %v\n", err)
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

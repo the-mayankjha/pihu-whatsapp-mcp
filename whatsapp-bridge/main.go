@@ -704,11 +704,129 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if r.Method == http.MethodPost {
+			if client.Store.ID != nil {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"logged_in": true, "jid": client.Store.ID.String()})
+				return
+			}
+			qrChan, err := client.GetQRChannel(context.Background())
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Could not start WhatsApp pairing: %v", err), http.StatusConflict)
+				return
+			}
+			if err := client.Connect(); err != nil {
+				http.Error(w, fmt.Sprintf("Could not connect WhatsApp bridge: %v", err), http.StatusBadGateway)
+				return
+			}
+			go func() {
+				for evt := range qrChan {
+					switch evt.Event {
+					case "code":
+						if err := runtimeStatus.setPairingQR(evt.Code); err != nil {
+							fmt.Printf("Could not render pairing QR: %v\n", err)
+							continue
+						}
+						if err := whatsappRelay.publish("pairing", evt.Code, relayStatus()); err != nil {
+							fmt.Printf("WhatsApp pairing relay unavailable: %v\n", err)
+						}
+					case "success":
+						runtimeStatus.clearQR()
+						runtimeStatus.Lock()
+						runtimeStatus.connected = true
+						runtimeStatus.loggedIn = true
+						runtimeStatus.stage = "syncing"
+						if client.Store.ID != nil {
+							runtimeStatus.jid = client.Store.ID.String()
+						}
+						runtimeStatus.Unlock()
+						_ = whatsappRelay.publish("syncing", "", relayStatus())
+						return
+					}
+				}
+			}()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]any{"started": true})
+			return
+		}
 		runtimeStatus.RLock()
 		state := map[string]any{"logged_in": client.Store.ID != nil, "qr_code": runtimeStatus.qrCode, "qr_image": runtimeStatus.qrImage, "stage": runtimeStatus.stage}
 		runtimeStatus.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(state)
+	})
+	mux.HandleFunc("/api/open-auth-page", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := whatsappRelay.openPage(); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"opened": true})
+	})
+	mux.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		remoteUnlinked := true
+		if client.Store.ID != nil {
+			if err := client.Logout(); err != nil {
+				remoteUnlinked = false
+				fmt.Printf("Remote WhatsApp unlink failed; clearing the local session: %v\n", err)
+				client.Disconnect()
+				if deleteErr := client.Store.Delete(); deleteErr != nil {
+					http.Error(w, fmt.Sprintf("Could not clear the local WhatsApp session: %v", deleteErr), http.StatusInternalServerError)
+					return
+				}
+			}
+		}
+		if _, clearErr := messageStore.db.Exec("DELETE FROM messages"); clearErr != nil {
+			http.Error(w, fmt.Sprintf("Device unlinked, but local message data could not be cleared: %v", clearErr), http.StatusInternalServerError)
+			return
+		}
+		if _, clearErr := messageStore.db.Exec("DELETE FROM chats"); clearErr != nil {
+			http.Error(w, fmt.Sprintf("Device unlinked, but local chat data could not be cleared: %v", clearErr), http.StatusInternalServerError)
+			return
+		}
+		runtimeStatus.clearQR()
+		runtimeStatus.Lock()
+		runtimeStatus.connected = false
+		runtimeStatus.loggedIn = false
+		runtimeStatus.jid = ""
+		runtimeStatus.stage = "waiting"
+		runtimeStatus.progress = 0
+		runtimeStatus.chatsSynced = 0
+		runtimeStatus.Unlock()
+		_ = whatsappRelay.publish("error", "", relayStatus())
+		whatsappRelay.reset()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"success":         true,
+			"remote_unlinked": remoteUnlinked,
+			"logged_in":       client.Store.ID != nil,
+			"has_session":     client.Store.ID != nil,
+		})
+	})
+	mux.HandleFunc("/api/clear", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if _, err := messageStore.db.Exec("DELETE FROM messages"); err != nil {
+			http.Error(w, fmt.Sprintf("Could not clear WhatsApp message data: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if _, err := messageStore.db.Exec("DELETE FROM chats"); err != nil {
+			http.Error(w, fmt.Sprintf("Could not clear WhatsApp chat data: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	})
 
 	// Handler for sending messages
