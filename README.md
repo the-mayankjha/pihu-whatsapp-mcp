@@ -8,16 +8,16 @@ PIHU WhatsApp MCP connects a WhatsApp account to PIHU through a local Go bridge 
 
 - **WhatsApp bridge** (`whatsapp-bridge/`): Go client that pairs with WhatsApp, exposes a loopback HTTP API for PIHU, and stores the WhatsApp session and message history locally.
 - **MCP server** (`whatsapp-mcp-server/`): Python FastMCP server that exposes WhatsApp actions to PIHU and other compatible MCP clients.
-- **PIHU auth and status page**: During pairing, the bridge creates a short-lived session with PIHU’s hosted relay and opens [`pihu.nfks.co.in/mcp/whatsapp/auth`](https://pihu.nfks.co.in/mcp/whatsapp/auth). The page displays the live QR and pairing/history-sync status. The QR itself is sent through the short-lived, token-authorized session; it is not added to the page URL.
+- **Local PIHU auth and status page**: The bridge serves the pairing UI at `http://127.0.0.1:8080/mcp/whatsapp/auth`. It reads the QR and pairing/history-sync state directly from the local bridge API; no hosted relay or network service is required.
 
 ## Pair WhatsApp in PIHU OS
 
 1. Open **PIHU OS → Settings → Connections → PIHU WhatsApp MCP**.
-2. Start or refresh the WhatsApp connection. PIHU starts the local bridge and opens the secure PIHU pairing page.
+2. Start or refresh the WhatsApp connection. PIHU starts the local bridge and opens its local pairing page.
 3. On your phone, open WhatsApp and choose **Linked devices → Link a device**, then scan the displayed QR code.
 4. Keep PIHU open while WhatsApp connects and history synchronization runs. The page and PIHU settings show the live connection and sync state.
 
-If the hosted pairing service is unavailable, the bridge keeps the QR available through its loopback API so PIHU can show it locally. A successful pairing is persisted by WhatsApp’s local device session; the hosted page session is temporary and expires automatically.
+The pairing page, QR code, WhatsApp session, and message history remain on the computer. A successful pairing is persisted by WhatsApp’s local device session.
 
 ## Requirements
 
@@ -36,7 +36,7 @@ cd whatsapp-bridge
 go run .
 ```
 
-The bridge listens on `127.0.0.1:8080`; it does not bind the pairing and message API to the network. PIHU uses this local API to read the current QR and connection state. During QR pairing the bridge also opens the hosted PIHU auth page and relays updates to it.
+The bridge listens on `127.0.0.1:8080`; it does not bind the pairing and message API to the network. It serves the local auth UI at `/mcp/whatsapp/auth` and provides the QR and connection state through its local API.
 
 ### 2. Start the Python MCP server
 
@@ -49,17 +49,6 @@ uv run main.py
 ```
 
 Configure your MCP client to launch `uv --directory /absolute/path/to/pihu-whatsapp-mcp/whatsapp-mcp-server run main.py`. In PIHU OS, the app manages the MCP server and Go bridge for you.
-
-### Optional bridge configuration
-
-The bridge uses these defaults. Override them only when running against a compatible PIHU deployment:
-
-| Environment variable | Default | Purpose |
-|---|---|---|
-| `PIHU_WHATSAPP_RELAY_URL` | `https://pihu.nfks.co.in/api/v2/whatsapp/sessions` | Hosted short-lived pairing-session API |
-| `PIHU_WHATSAPP_AUTH_PAGE` | `https://pihu.nfks.co.in/mcp/whatsapp/auth` | Hosted QR pairing and status page |
-
-The relay URL and auth page must be used together with the corresponding PIHU web service. The bridge creates a random writer/viewer token pair for each temporary session and keeps those tokens in memory.
 
 ## Available MCP tools
 
@@ -81,15 +70,13 @@ The relay URL and auth page must be used together with the corresponding PIHU we
 ## Local data and security
 
 - WhatsApp session credentials and message history are stored by the bridge in its local `whatsapp-bridge/store/` directory. Keep this directory private and do not commit it.
-- The hosted pairing relay carries the QR and connection/sync status for the active pairing session. It does not receive the local message database.
-- The relay uses separate random bearer tokens for viewing the auth page and updating pairing status. Tokens are sent in the URL fragment only for the viewer session; fragments are not sent in the page HTTP request. The QR is returned by the token-protected status API.
+- Pairing UI, QR code, session credentials, and message database stay on the local computer. The auth page binds only to the loopback bridge.
 - The bridge HTTP API is bound to loopback and accepts CORS requests only from PIHU’s app origins and local development origins.
 - Messages read through MCP may be shared with the connected AI client according to that client’s configuration. Only enable the tools and scopes you need, and treat message content as untrusted input.
 
 ## Troubleshooting
 
-- **The auth page says the session is incomplete or expired:** restart pairing from PIHU OS so the bridge creates a fresh short-lived session.
-- **The hosted page cannot load the QR:** check network access to `pihu.nfks.co.in`; PIHU can use the local bridge QR as a fallback.
+- **The local auth page cannot load:** confirm the bridge is running and open `http://127.0.0.1:8080/mcp/whatsapp/auth` from the same computer.
 - **The local QR is missing:** confirm the bridge is running and that `http://127.0.0.1:8080/api/status` is reachable from PIHU.
 - **WhatsApp is already linked:** the bridge reconnects using its local session and does not need a new QR. Use PIHU’s unlink/reset controls if you intend to pair again.
 - **History is still syncing:** leave PIHU running; large histories may take time. The connection page reports the latest progress received from WhatsApp.

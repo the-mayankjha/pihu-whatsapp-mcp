@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"math"
 	"math/rand"
 	"net/http"
@@ -29,6 +31,9 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 )
+
+//go:embed web/*
+var authPageFiles embed.FS
 
 // Message represents a chat message for our client
 type Message struct {
@@ -677,6 +682,30 @@ func extractDirectPathFromURL(url string) string {
 // Start a REST API server to expose the WhatsApp client functionality
 func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
 	mux := http.NewServeMux()
+	webFiles, err := fs.Sub(authPageFiles, "web")
+	if err != nil {
+		panic(fmt.Sprintf("could not load local WhatsApp auth page: %v", err))
+	}
+	authHTML, err := fs.ReadFile(webFiles, "auth.html")
+	if err != nil {
+		panic(fmt.Sprintf("could not read local WhatsApp auth page: %v", err))
+	}
+	webAssets, err := fs.Sub(webFiles, "assets")
+	if err != nil {
+		panic(fmt.Sprintf("could not load local WhatsApp auth assets: %v", err))
+	}
+	assetsServer := http.FileServer(http.FS(webAssets))
+	authPageHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(authHTML)
+	}
+	mux.HandleFunc("/mcp/whatsapp/auth", authPageHandler)
+	mux.HandleFunc("/mcp/whatsapp/auth/", authPageHandler)
+	mux.Handle("/assets/", http.StripPrefix("/assets/", assetsServer))
 	allowedOrigins := map[string]bool{
 		"tauri://localhost": true, "https://tauri.localhost": true,
 		"http://tauri.localhost": true, "http://localhost:5173": true,
