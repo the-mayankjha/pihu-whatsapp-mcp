@@ -111,6 +111,13 @@ func (relay *pairingRelay) openPage() error {
 	return nil
 }
 
+func (relay *pairingRelay) reopenPage() error {
+	relay.mu.Lock()
+	relay.opened = false
+	relay.mu.Unlock()
+	return relay.openPage()
+}
+
 func (relay *pairingRelay) authURL() (string, error) {
 	relay.mu.Lock()
 	session := relay.session

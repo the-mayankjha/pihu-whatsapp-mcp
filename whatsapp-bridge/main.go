@@ -761,7 +761,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := whatsappRelay.openPage(); err != nil {
+		if err := whatsappRelay.reopenPage(); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
