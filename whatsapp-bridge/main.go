@@ -51,14 +51,14 @@ type MessageStore struct {
 }
 
 // Initialize message store
-func NewMessageStore() (*MessageStore, error) {
-	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
-		return nil, fmt.Errorf("failed to create store directory: %v", err)
+func NewMessageStore(databasePath string) (*MessageStore, error) {
+	// Desktop, CLI, and voice tools share the same local WhatsApp data directory.
+	if err := os.MkdirAll(filepath.Dir(databasePath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create WhatsApp data directory: %v", err)
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on")
+	db, err := sql.Open("sqlite3", "file:"+filepath.ToSlash(databasePath)+"?_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -645,7 +645,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Download the media using whatsmeow client
-	mediaData, err := client.Download(downloader)
+	mediaData, err := client.Download(context.Background(), downloader)
 	if err != nil {
 		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
 	}
@@ -846,11 +846,11 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		}
 		remoteUnlinked := true
 		if client.Store.ID != nil {
-			if err := client.Logout(); err != nil {
+			if err := client.Logout(r.Context()); err != nil {
 				remoteUnlinked = false
 				fmt.Printf("Remote WhatsApp unlink failed; clearing the local session: %v\n", err)
 				client.Disconnect()
-				if deleteErr := client.Store.Delete(); deleteErr != nil {
+				if deleteErr := client.Store.Delete(r.Context()); deleteErr != nil {
 					http.Error(w, fmt.Sprintf("Could not clear the local WhatsApp session: %v", deleteErr), http.StatusInternalServerError)
 					return
 				}
@@ -1036,20 +1036,28 @@ func main() {
 	// Create database connection for storing session data
 	dbLog := waLog.Stdout("Database", "INFO", true)
 
-	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
-		logger.Errorf("Failed to create store directory: %v", err)
+	// Keep the bridge on the same durable session and message stores as PIHU's
+	// CLI and agent integrations. A repo-relative store silently creates a
+	// second, unpaired WhatsApp device when launched from the desktop app.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logger.Errorf("Failed to resolve the user home directory: %v", err)
+		return
+	}
+	dataDir := filepath.Join(home, ".pihu", "whatsapp")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Errorf("Failed to create WhatsApp data directory: %v", err)
 		return
 	}
 
-	container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:"+filepath.ToSlash(filepath.Join(dataDir, "whatsapp.db"))+"?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
 
 	// Get device store - This contains session information
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No device exists, create one
@@ -1069,7 +1077,7 @@ func main() {
 	}
 
 	// Initialize message store
-	messageStore, err := NewMessageStore()
+	messageStore, err := NewMessageStore(filepath.Join(dataDir, "messages.db"))
 	if err != nil {
 		logger.Errorf("Failed to initialize message store: %v", err)
 		return
@@ -1274,7 +1282,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 		// If we didn't get a name, try group info
 		if name == "" {
-			groupInfo, err := client.GetGroupInfo(jid)
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
 			if err == nil && groupInfo.Name != "" {
 				name = groupInfo.Name
 			} else {
@@ -1289,7 +1297,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Infof("Getting name for contact: %s", chatJID)
 
 		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(jid)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
 		if err == nil && contact.FullName != "" {
 			name = contact.FullName
 		} else if sender != "" {
