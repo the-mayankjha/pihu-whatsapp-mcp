@@ -25,6 +25,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	waStore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -1068,6 +1069,9 @@ func main() {
 			return
 		}
 	}
+
+	// Set the display name WhatsApp stores for this linked desktop device.
+	waStore.DeviceProps.Os = proto.String("PIHU OS")
 
 	// Create client instance
 	client := whatsmeow.NewClient(deviceStore, logger)

@@ -3,3 +3,5 @@
 @media(max-width:760px){.wa-auth-page{display:block;padding:14px}.wa-auth-layout{grid-template-columns:1fr;min-height:0;margin:0 auto;border-radius:22px}.wa-copy{padding:38px 26px}.wa-visual{min-height:680px;border-top:1px solid #281e2d14;border-left:0}}
 @media(max-width:440px){.wa-copy{padding:30px 20px}.wa-brandline{margin-bottom:28px}.wa-copy h1{font-size:48px}.wa-description{font-size:13px}.wa-features{gap:14px 8px}.wa-visual{min-height:650px;padding:32px 17px}.wa-visual-stage{height:340px}.wa-phone-wrap{transform:scale(.9)}.wa-float-card{padding:9px}.float-message{left:-2%}.float-contacts{right:-2%}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important}}
+
+#visual-label.is-connected{color:var(--green)}

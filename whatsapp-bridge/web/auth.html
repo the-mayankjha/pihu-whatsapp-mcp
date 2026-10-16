@@ -57,6 +57,7 @@
         $('title').innerHTML = connected ? 'WhatsApp<br>is ready' : syncing ? 'Syncing your<br>messages' : 'Connect<br>WhatsApp';
         $('description').textContent = connected ? 'Your WhatsApp device is linked. Return to PIHU to search chats, send messages, and use your connected tools.' : syncing ? 'Your device is linked. PIHU is preparing your recent conversations and contacts on this device.' : 'Link WhatsApp to PIHU to search conversations, send messages, and sync recent chats securely on your device.';
         $('visual-label').textContent = connected ? 'CONNECTED' : syncing ? 'MESSAGE SYNC' : 'SCAN TO CONNECT';
+        $('visual-label').classList.toggle('is-connected', connected);
         $('visual-title').textContent = connected ? 'WhatsApp linked' : syncing ? 'Your chats are on their way' : 'Link WhatsApp with PIHU';
         $('visual-description').textContent = connected ? 'Connection complete. Return to the PIHU desktop app.' : syncing ? 'Syncing conversations and contacts securely to this device.' : 'Open WhatsApp on your phone and scan the QR code shown in PIHU.';
         $('float-message-title').textContent = syncing ? 'Messages' : 'Chats';
