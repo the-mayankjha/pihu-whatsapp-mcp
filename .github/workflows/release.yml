@@ -1,5 +1,11 @@
 name: Release MCP package
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing version tag to build
+        required: true
+        type: string
   push:
     tags: ['v*']
 permissions:
@@ -20,8 +26,12 @@ jobs:
             target: linux-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      PIHU_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -33,7 +43,7 @@ jobs:
           go-version: '1.25.x'
       - name: Check version matches tag
         shell: bash
-        run: python -c "import json,os; assert 'v'+json.load(open('manifest.json'))['version'] == os.environ['GITHUB_REF_NAME'], 'Tag does not match manifest version'"
+        run: python -c "import json,os; assert 'v'+json.load(open('manifest.json'))['version'] == os.environ['PIHU_RELEASE_TAG'], 'Tag does not match manifest version'"
       - name: Build package and dependencies
         run: python tools/build_release.py --repository ${{ github.repository }}
       - uses: actions/upload-artifact@v4
@@ -48,6 +58,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -58,7 +70,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo 'Release already exists; immutable packages must use a new version.' >&2
