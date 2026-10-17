@@ -10,11 +10,13 @@ import (
 	"io/fs"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -682,6 +684,25 @@ func extractDirectPathFromURL(url string) string {
 
 // Start a REST API server to expose the WhatsApp client functionality
 func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil && os.Getenv("PIHU_MCP_ALLOW_DYNAMIC_PORT") == "1" {
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+	}
+	if err != nil {
+		panic(fmt.Sprintf("Cannot bind WhatsApp API: %v", err))
+	}
+	port = listener.Addr().(*net.TCPAddr).Port
+	whatsappRelay.mu.Lock()
+	whatsappRelay.pageURL = fmt.Sprintf("http://127.0.0.1:%d/mcp/whatsapp/auth", port)
+	whatsappRelay.mu.Unlock()
+	if descriptor := os.Getenv("PIHU_MCP_READY_FILE"); descriptor != "" {
+		payload, _ := json.Marshal(map[string]interface{}{"id": "pihu-whatsapp-mcp", "pid": os.Getpid(), "port": port})
+		if err := os.WriteFile(descriptor, payload, 0600); err != nil {
+			listener.Close()
+			panic(err)
+		}
+	}
+
 	mux := http.NewServeMux()
 	webFiles, err := fs.Sub(authPageFiles, "web")
 	if err != nil {
@@ -1005,7 +1026,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 
 	// Run server in a goroutine so it doesn't block
 	go func() {
-		if err := http.ListenAndServe(serverAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 			if origin != "" && !allowedOrigins[origin] {
 				http.Error(w, "Origin not allowed", http.StatusForbidden)
@@ -1127,7 +1148,15 @@ func main() {
 	})
 
 	// Make the loopback API available before the user scans the first QR code.
-	startRESTServer(client, messageStore, 8080)
+	port := 8080
+	if value := os.Getenv("PIHU_MCP_PORT"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 || parsed > 65535 {
+			panic("Invalid manager-assigned port")
+		}
+		port = parsed
+	}
+	startRESTServer(client, messageStore, port)
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)

@@ -29,7 +29,7 @@ func (relay *pairingRelay) openPage() error {
 	relay.mu.Unlock()
 
 	parsed, err := url.Parse(pageURL)
-	if err != nil || parsed.Scheme != "http" || parsed.Host != "127.0.0.1:8080" || parsed.Path != "/mcp/whatsapp/auth" {
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/mcp/whatsapp/auth" {
 		return fmt.Errorf("WhatsApp auth page must use the local PIHU bridge URL")
 	}
 	var command *exec.Cmd
