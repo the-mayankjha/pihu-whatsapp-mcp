@@ -1,3 +1,6 @@
-*.db
-claude_desktop_config.json
-whatsapp.log
+.env
+.env.*
+.venv/
+node_modules/
+dist/
+__pycache__/

@@ -1,0 +1,92 @@
+{
+  "id": "pihu-whatsapp-mcp",
+  "description": "Search conversations and contacts, read messages, and send messages or media.",
+  "category": "Communication",
+  "runtime": {
+    "type": "python"
+  },
+  "tags": [
+    "whatsapp",
+    "messages",
+    "contacts",
+    "media"
+  ],
+  "type": "mcp",
+  "display_name": "PIHU WhatsApp MCP",
+  "version": "1.0.0",
+  "author": {
+    "name": "Mayank Jha (PIHU)"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/the-mayankjha/pihu-whatsapp-mcp",
+    "branch": "main"
+  },
+  "transport": {
+    "type": "stdio"
+  },
+  "tools": [
+    {
+      "name": "whatsapp_send_message",
+      "description": "Send a WhatsApp text message to a person by name, nickname, phone number, or JID.\n\nArgs:\n    recipient: Name (e.g. 'Anin', 'Mayank'), phone number with country code (e.g. '919876543210'), or JID.\n    message: The text content of the message to send."
+    },
+    {
+      "name": "whatsapp_search_contacts",
+      "description": "Search contacts across both WhatsApp conversation history and PIHU People directory.\n\nArgs:\n    query: Name, nickname, or phone number to search."
+    },
+    {
+      "name": "whatsapp_list_messages",
+      "description": "Get WhatsApp messages matching search criteria from local message store.\n\nArgs:\n    query: Text substring to search within message contents.\n    sender_phone_number: Filter by sender phone number.\n    chat_jid: Filter by chat JID.\n    limit: Max messages to return (default 15)."
+    },
+    {
+      "name": "whatsapp_list_chats",
+      "description": "List all active WhatsApp conversations and their last message timestamps.\n\nArgs:\n    limit: Max conversations to return (default 15)."
+    },
+    {
+      "name": "whatsapp_get_last_interaction",
+      "description": "Get the most recent WhatsApp message exchanged with a specific person or phone number.\n\nArgs:\n    contact_name_or_phone: The name or phone number of the contact."
+    },
+    {
+      "name": "whatsapp_send_file",
+      "description": "Send an image, video, document, or audio file to a recipient via WhatsApp.\n\nArgs:\n    recipient: Name, phone number with country code, or JID.\n    media_path: Absolute local filesystem path to the file."
+    },
+    {
+      "name": "whatsapp_download_media",
+      "description": "Download media attachments from a WhatsApp message to local storage.\n\nArgs:\n    message_id: The WhatsApp message ID containing media.\n    chat_jid: The chat JID where the message was received."
+    }
+  ],
+  "tool_count": 7,
+  "requirements": [
+    "Python 3.10 or newer"
+  ],
+  "installation": {
+    "type": "archive",
+    "entrypoint": "server.py"
+  },
+  "name": "pihu-whatsapp-mcp",
+  "artifacts": [],
+  "compatibility": {
+    "minimum_pihu_version": "1.2.8",
+    "operating_systems": [
+      "macos",
+      "windows",
+      "linux"
+    ],
+    "architectures": [
+      "arm64",
+      "x64"
+    ]
+  },
+  "permissions": {
+    "network": true,
+    "filesystem": false,
+    "shell_execution": false,
+    "env_vars_required": []
+  },
+  "auth_required": true,
+  "entrypoint": {
+    "command": "python",
+    "args": [],
+    "env": {}
+  }
+}
