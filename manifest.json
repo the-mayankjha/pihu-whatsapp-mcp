@@ -13,7 +13,7 @@
   ],
   "type": "mcp",
   "display_name": "PIHU WhatsApp MCP",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": {
     "name": "Mayank Jha (PIHU)"
   },
@@ -88,5 +88,6 @@
     "command": "python",
     "args": [],
     "env": {}
-  }
+  },
+  "schema_version": 1
 }

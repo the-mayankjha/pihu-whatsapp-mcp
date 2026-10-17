@@ -5,3 +5,5 @@
 - Included package dependencies; uses PIHU's shared Python or Node runtime.
 - SHA-256 integrity verification and immutable version metadata.
 - Existing accounts and user data remain outside package version directories.
+
+- Corrected package schema metadata for strict registry validation.
